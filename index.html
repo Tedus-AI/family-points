@@ -27,9 +27,13 @@
     <script>
         window.dbService = {
             isReady: false,
-            subscribe: () => () => {},
-            add: async () => {},
-            delete: async () => {}
+            subscribeRecords: () => () => {},
+            subscribeTags: () => () => {},
+            addRecord: async () => {},
+            deleteRecord: async () => {},
+            addTag: async () => {},
+            deleteTag: async () => {},
+            seedTags: async () => {}
         };
     </script>
 </head>
@@ -39,10 +43,10 @@
     <!-- 這是 Firebase 的 SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
         // ==========================================
-        // ▼▼▼ 您的 Firebase 設定已整合 ▼▼▼
+        // ▼▼▼ 您的 Firebase 設定 ▼▼▼
         // ==========================================
         const firebaseConfig = {
           apiKey: "AIzaSyC4b1921SqNxC-qqKr_lupUhSE6hBA8Zc0",
@@ -74,7 +78,9 @@
         // 覆寫 window.dbService 為真實的 Firebase 服務
         window.dbService = {
             isReady: isFirebaseReady,
-            subscribe: (callback) => {
+            
+            // 監聽紀錄 (Records)
+            subscribeRecords: (callback) => {
                 if (!isFirebaseReady) return () => {};
                 const q = query(collection(db, "records"), orderBy("createdAt", "desc"));
                 return onSnapshot(q, (snapshot) => {
@@ -86,14 +92,25 @@
                         }) || '剛剛'
                     }));
                     callback(data);
-                }, (error) => {
-                    console.error("讀取資料錯誤:", error);
-                    if (error.code === 'permission-denied') {
-                        alert("讀取權限被拒絕！請確認 Firebase 的 Rules 是否已改為 'allow read, write: if true;'");
-                    }
                 });
             },
-            add: async (record) => {
+
+            // 監聽標籤 (Tags)
+            subscribeTags: (callback) => {
+                if (!isFirebaseReady) return () => {};
+                // 標籤依建立時間排序，這樣新加的會在後面
+                const q = query(collection(db, "tags"), orderBy("createdAt", "asc"));
+                return onSnapshot(q, (snapshot) => {
+                    const data = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    callback(data);
+                });
+            },
+
+            // 新增紀錄
+            addRecord: async (record) => {
                 if (!isFirebaseReady) return;
                 try {
                     await addDoc(collection(db, "records"), {
@@ -101,39 +118,75 @@
                         createdAt: serverTimestamp()
                     });
                 } catch (e) {
-                    alert("新增失敗，請檢查網路或資料庫設定");
-                    console.error(e);
+                    console.error("Add Record Error", e);
+                    alert("新增紀錄失敗");
                 }
             },
-            delete: async (id) => {
+
+            // 刪除紀錄
+            deleteRecord: async (id) => {
                 if (!isFirebaseReady) return;
-                if (window.confirm('確定要撤銷這條紀錄嗎？（雲端資料將被刪除）')) {
+                if (window.confirm('確定要撤銷這條紀錄嗎？（分數會恢復）')) {
                     try {
                         await deleteDoc(doc(db, "records", id));
-                    } catch (e) {
-                        alert("刪除失敗");
-                        console.error(e);
-                    }
+                    } catch (e) { console.error(e); }
+                }
+            },
+
+            // 新增標籤
+            addTag: async (tag) => {
+                if (!isFirebaseReady) return;
+                try {
+                    await addDoc(collection(db, "tags"), {
+                        ...tag,
+                        createdAt: serverTimestamp()
+                    });
+                } catch (e) { console.error(e); }
+            },
+
+            // 刪除標籤
+            deleteTag: async (id) => {
+                if (!isFirebaseReady) return;
+                if (window.confirm('確定要從快速選單移除這個選項嗎？(不會影響已記下的分數)')) {
+                    try {
+                        await deleteDoc(doc(db, "tags", id));
+                    } catch (e) { console.error(e); }
+                }
+            },
+            
+            // 初始化預設標籤 (如果資料庫是空的)
+            seedTags: async (presets) => {
+                if (!isFirebaseReady) return;
+                const tagsRef = collection(db, "tags");
+                // 簡單檢查是否有任何 tag，如果完全沒有才寫入預設值
+                const snapshot = await getDocs(tagsRef);
+                if (snapshot.empty) {
+                    console.log("Seeding default tags...");
+                    const batchPromises = presets.map(tag => addDoc(tagsRef, {
+                        ...tag,
+                        createdAt: serverTimestamp()
+                    }));
+                    await Promise.all(batchPromises);
                 }
             }
         };
 
-        // [FIX] 發送事件通知 React 資料庫已準備好，而不是直接呼叫函式
+        // 發送事件通知
         window.dispatchEvent(new Event('firebase-ready'));
     </script>
 
     <script type="text/babel">
-        // [FIX] 移除 window.startReactApp 包裝，直接執行 React
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
-        // --- 圖示組件 ---
+        // --- Icons ---
         const Trash2 = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>;
+        const XCircle = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>;
         const Plus = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
         const AlertCircle = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
-        const User = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
-        const Coins = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></svg>;
-        const UserCheck = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>;
         const Trophy = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2h-4a4 4 0 0 0-4 4v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V6a4 4 0 0 0-4-4Z"/></svg>;
+        const User = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+        const UserCheck = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>;
+        const Coins = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></svg>;
         const CloudOff = (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/></svg>;
 
         function App() {
@@ -146,45 +199,55 @@
             const [activeTab, setActiveTab] = useState(CHILDREN[0]);
             
             const [allRecords, setAllRecords] = useState([]);
+            const [allTags, setAllTags] = useState([]); 
+            
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [currentReason, setCurrentReason] = useState('');
             const [rewardAmount, setRewardAmount] = useState(10);
             
-            // [FIX] 使用更穩健的方式偵測 Firebase 狀態
             const [isConfigured, setIsConfigured] = useState(window.dbService && window.dbService.isReady);
 
             const DEDUCTION_AMOUNT = 10;
 
-            // [FIX] 監聽 firebase-ready 事件
+            // 預設項目 (用於初始化 DB)
+            const INITIAL_PRESETS = useMemo(() => ([
+                { label: '頂嘴', value: 10, type: 'punish' },
+                { label: '忘記關燈', value: 10, type: 'punish' },
+                { label: '用餐完沒整理', value: 10, type: 'punish' },
+                { label: '垃圾亂丟沒分類', value: 10, type: 'punish' },
+                { label: '傍晚在家裡奔跑', value: 10, type: 'punish' },
+                { label: '浴巾亂放', value: 10, type: 'punish' },
+                { label: '小考95分以上', value: 20, type: 'reward' },
+                { label: '小考100分', value: 100, type: 'reward' },
+                { label: '大考90分以上', value: 100, type: 'reward' },
+                { label: '大考100分', value: 200, type: 'reward' }
+            ]), []);
+
+            // 初始化與監聽
             useEffect(() => {
                 const checkReady = () => {
                     if (window.dbService && window.dbService.isReady) {
                         setIsConfigured(true);
+                        // 嘗試初始化預設標籤
+                        window.dbService.seedTags(INITIAL_PRESETS);
                     }
                 };
-
-                // 先檢查一次
                 checkReady();
-
-                // 註冊事件監聽
                 window.addEventListener('firebase-ready', checkReady);
                 return () => window.removeEventListener('firebase-ready', checkReady);
-            }, []);
+            }, [INITIAL_PRESETS]);
 
-            // --- Cloud Sync Effect ---
+            // 訂閱資料
             useEffect(() => {
                 if (!isConfigured) return;
-
-                // 訂閱雲端資料
-                const unsubscribe = window.dbService.subscribe((data) => {
-                    setAllRecords(data);
-                });
-
-                return () => unsubscribe();
+                const unsubRecords = window.dbService.subscribeRecords(setAllRecords);
+                const unsubTags = window.dbService.subscribeTags(setAllTags);
+                return () => { unsubRecords(); unsubTags(); };
             }, [isConfigured]);
 
-            // Filter records based on mode
+            // 過濾資料
             const currentRecords = allRecords.filter(r => r.type === mode);
+            const currentTags = allTags.filter(t => t.type === mode);
 
             const getScore = (name) => {
                 return allRecords
@@ -195,21 +258,31 @@
             const handleAddRecord = () => {
                 if (!currentReason.trim()) return;
                 if (!isConfigured) {
-                    alert("請先設定 Firebase Config 才能同步資料喔！");
+                    alert("請先設定 Firebase Config");
                     return;
                 }
 
                 const amount = mode === 'punish' ? DEDUCTION_AMOUNT : parseInt(rewardAmount);
 
-                const newRecord = {
+                // 1. 新增紀錄
+                window.dbService.addRecord({
                     habit: currentReason,
                     child: selectedChild,
                     recorder: selectedRecorder,
                     amount: amount,
                     type: mode,
-                };
+                });
 
-                window.dbService.add(newRecord);
+                // 2. 自動儲存新標籤 (如果該標籤不存在於 DB 中)
+                const exists = currentTags.some(t => t.label === currentReason);
+                if (!exists) {
+                    window.dbService.addTag({
+                        label: currentReason,
+                        value: amount,
+                        type: mode
+                    });
+                }
+
                 setCurrentReason('');
                 setRewardAmount(10);
                 setIsModalOpen(false);
@@ -217,29 +290,24 @@
             };
 
             const handleDeleteRecord = (id) => {
-                window.dbService.delete(id);
+                window.dbService.deleteRecord(id);
+            };
+            
+            const handleDeleteTag = (e, id) => {
+                e.stopPropagation(); // 避免觸發按鈕點擊
+                window.dbService.deleteTag(id);
+            };
+
+            const handleTagClick = (tag) => {
+                setCurrentReason(tag.label);
+                if (mode === 'reward') {
+                    setRewardAmount(tag.value || 10);
+                }
             };
 
             const displayRecords = currentRecords.filter(r => r.child === activeTab);
 
-            // --- Config Warning ---
-            if (!isConfigured) {
-                return (
-                    <div className="min-h-screen bg-slate-800 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-2xl p-8 max-w-md w-full text-center space-y-4">
-                            <CloudOff className="w-16 h-16 mx-auto text-slate-400" />
-                            <h2 className="text-2xl font-bold text-slate-800">連接資料庫中...</h2>
-                            <p className="text-slate-600 text-left text-sm leading-relaxed">
-                                系統正在連線到雲端，請稍候...
-                                <br/><br/>
-                                <span className="text-xs text-slate-400">如果您長時間看到此畫面，請重新整理網頁，或檢查 Firebase 設定。</span>
-                            </p>
-                        </div>
-                    </div>
-                );
-            }
-
-            // Theme Config (Same as before)
+            // Theme Config
             const theme = mode === 'punish' ? {
                 bg: 'bg-slate-100',
                 text: 'text-slate-800',
@@ -253,7 +321,6 @@
                 scoreColor: 'text-red-400',
                 cardBg: 'bg-slate-800',
                 modalBtn: 'bg-red-500 hover:bg-red-600 shadow-red-500/30',
-                tags: ['沒收玩具', '頂嘴', '不刷牙', '挑食', '打人', '尖叫'],
                 ruleText: `規則：一次扣 ${DEDUCTION_AMOUNT} R 幣`
             } : {
                 bg: 'bg-amber-50',
@@ -268,11 +335,24 @@
                 scoreColor: 'text-yellow-400',
                 cardBg: 'bg-emerald-800',
                 modalBtn: 'bg-yellow-500 hover:bg-yellow-600 shadow-yellow-500/30 text-white',
-                tags: ['考試100分', '作業全對', '主動閱讀', '幫忙做家事', '練琴認真', '早起上學'],
                 ruleText: '規則：由大人自訂 R 幣金額'
             };
 
             const CurrentIcon = theme.icon;
+
+            if (!isConfigured) {
+                return (
+                    <div className="min-h-screen bg-slate-800 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl p-8 max-w-md w-full text-center space-y-4">
+                            <CloudOff className="w-16 h-16 mx-auto text-slate-400" />
+                            <h2 className="text-2xl font-bold text-slate-800">連接資料庫中...</h2>
+                            <p className="text-slate-600 text-left text-sm leading-relaxed">
+                                系統正在連線，請稍候...
+                            </p>
+                        </div>
+                    </div>
+                );
+            }
 
             return (
                 <div className={`min-h-screen ${theme.bg} p-4 md:p-8 font-sans ${theme.text} transition-colors duration-300`}>
@@ -447,18 +527,23 @@
                     {/* Modal */}
                     {isModalOpen && (
                         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-                            <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-                                <div className="mb-6 border-b pb-4">
+                            <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl flex flex-col max-h-[90vh]">
+                                <div className="mb-4 border-b pb-4 flex-shrink-0">
                                     <h3 className="text-2xl font-bold text-slate-800">{mode === 'punish' ? '新增扣點' : '新增獎勵'}</h3>
                                     <div className="mt-2 text-sm text-slate-500 flex gap-4">
                                         <span>對象：<b className="text-blue-600">{selectedChild}</b></span>
                                         <span>紀錄者：<b className="text-slate-700">{selectedRecorder}</b></span>
                                     </div>
                                 </div>
-                                <div className="space-y-4">
+                                <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar px-1">
                                     <div>
                                         <label className="block text-sm font-medium text-slate-600 mb-1">{mode === 'punish' ? '違規事項' : '獎勵原因'}</label>
-                                        <input type="text" autoFocus placeholder={mode === 'punish' ? "請輸入原因..." : "例如：數學考100分..."} value={currentReason} onChange={(e) => setCurrentReason(e.target.value)} className={`w-full text-lg p-3 border-2 border-slate-200 rounded-xl outline-none focus:ring-4 transition-all ${mode === 'punish' ? 'focus:border-red-400 focus:ring-red-100' : 'focus:border-yellow-400 focus:ring-yellow-100'}`} />
+                                        <input type="text" autoFocus 
+                                            placeholder={mode === 'punish' ? "可輸入新原因，下次會自動記憶..." : "例如：數學考100分..."} 
+                                            value={currentReason} 
+                                            onChange={(e) => setCurrentReason(e.target.value)} 
+                                            className={`w-full text-lg p-3 border-2 border-slate-200 rounded-xl outline-none focus:ring-4 transition-all ${mode === 'punish' ? 'focus:border-red-400 focus:ring-red-100' : 'focus:border-yellow-400 focus:ring-yellow-100'}`} 
+                                        />
                                     </div>
                                     {mode === 'reward' && (
                                         <div>
@@ -471,11 +556,37 @@
                                             </div>
                                         </div>
                                     )}
-                                    <div className="flex flex-wrap gap-2">
-                                        {theme.tags.map((tag) => <button key={tag} onClick={() => setCurrentReason(tag)} className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full text-sm transition-colors">{tag}</button>)}
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-600 mb-2">快速選擇（可管理）</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {currentTags.map((tag) => (
+                                                <div key={tag.id} 
+                                                     onClick={() => handleTagClick(tag)} 
+                                                     className={`group relative px-3 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-1 cursor-pointer border ${currentReason === tag.label ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-slate-400'}`}>
+                                                    
+                                                    {tag.label}
+                                                    {mode === 'reward' && <span className="opacity-70 text-xs">(${tag.value})</span>}
+                                                    
+                                                    {/* 刪除按鈕 */}
+                                                    <button 
+                                                        onClick={(e) => handleDeleteTag(e, tag.id)}
+                                                        className="ml-1 p-0.5 rounded-full hover:bg-red-100 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                        title="移除此選項"
+                                                    >
+                                                        <XCircle />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            {currentTags.length === 0 && (
+                                                <div className="text-sm text-slate-400 italic py-2">
+                                                    尚無選項，輸入並送出後會自動儲存。
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
-                                <div className="flex gap-3 mt-8">
+                                <div className="flex gap-3 mt-6 pt-4 border-t flex-shrink-0">
                                     <button onClick={() => setIsModalOpen(false)} className="flex-1 py-3 px-4 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-colors">取消</button>
                                     <button onClick={handleAddRecord} disabled={!currentReason.trim()} className={`flex-1 py-3 px-4 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${theme.modalBtn}`}>確認{mode === 'punish' ? '扣點' : '獎勵'}</button>
                                 </div>
